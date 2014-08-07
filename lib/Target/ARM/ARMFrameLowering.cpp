@@ -146,7 +146,7 @@ static int sizeOfSPAdjustment(const MachineInstr *MI) {
   return count;
 }
 
-static bool WindowsRequiresStackProbe(const MachineFunction &MF,
+static bool FunctionRequiresStackProbe(const MachineFunction &MF,
                                       size_t StackSizeInBytes) {
   const MachineFrameInfo *MFI = MF.getFrameInfo();
   if (MFI->getStackProtectorIndex() > 0)
@@ -201,8 +201,10 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
         .addCFIIndex(CFIIndex);
   }
 
+  bool MayProbe = STI.isTargetWindows() || MF.shouldProbeStack();
+
   if (!AFI->hasStackFrame() &&
-      (!STI.isTargetWindows() || !WindowsRequiresStackProbe(MF, NumBytes))) {
+      (!MayProbe || !FunctionRequiresStackProbe(MF, NumBytes))) {
     if (NumBytes - ArgRegsSaveSize != 0) {
       emitSPUpdate(isARM, MBB, MBBI, dl, TII, -(NumBytes - ArgRegsSaveSize),
                    MachineInstr::FrameSetup);
@@ -299,7 +301,7 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
   } else
     NumBytes = DPRCSOffset;
 
-  if (STI.isTargetWindows() && WindowsRequiresStackProbe(MF, NumBytes)) {
+  if (MayProbe && FunctionRequiresStackProbe(MF, NumBytes)) {
     uint32_t NumWords = NumBytes >> 2;
 
     if (NumWords < 65536)
@@ -311,6 +313,9 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
         .addImm(NumWords)
         .setMIFlags(MachineInstr::FrameSetup);
 
+    const char *StackProbeSymbol = STI.isTargetWindows() ?
+        "__chkstk" : "__probestack";
+
     switch (TM.getCodeModel()) {
     case CodeModel::Small:
     case CodeModel::Medium:
@@ -318,14 +323,14 @@ void ARMFrameLowering::emitPrologue(MachineFunction &MF) const {
     case CodeModel::Kernel:
       BuildMI(MBB, MBBI, dl, TII.get(ARM::tBL))
         .addImm((unsigned)ARMCC::AL).addReg(0)
-        .addExternalSymbol("__chkstk")
+        .addExternalSymbol(StackProbeSymbol)
         .addReg(ARM::R4, RegState::Implicit)
         .setMIFlags(MachineInstr::FrameSetup);
       break;
     case CodeModel::Large:
     case CodeModel::JITDefault:
       BuildMI(MBB, MBBI, dl, TII.get(ARM::t2MOVi32imm), ARM::R12)
-        .addExternalSymbol("__chkstk")
+        .addExternalSymbol(StackProbeSymbol)
         .setMIFlags(MachineInstr::FrameSetup);
 
       BuildMI(MBB, MBBI, dl, TII.get(ARM::tBLXr))
