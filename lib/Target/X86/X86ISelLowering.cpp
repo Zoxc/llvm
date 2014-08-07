@@ -20101,25 +20101,25 @@ X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
   // non-trivial part is impdef of ESP.
 
   if (!Subtarget->isTargetWin32()) {
-      unsigned SP;
-      unsigned AX;
-      if (Subtarget->is64Bit()) {
-        SP = X86::RSP;
-        AX = X86::RAX;
-      } else {
-        SP = X86::ESP;
-        AX = X86::EAX;
-      }
-      // __chkstk(MSVCRT): does not update stack pointer.
-      // Clobbers R10, R11 and EFLAGS.
-      BuildMI(*BB, MI, DL, TII->get(CallOp))
-        .addExternalSymbol(StackProbeSymbol)
-        .addReg(AX, RegState::Implicit)
-        .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
-      // AX has the offset to be subtracted from SP.
-      BuildMI(*BB, MI, DL, TII->get(X86::SUB64rr), SP)
-        .addReg(SP)
-        .addReg(AX);
+    unsigned SP;
+    unsigned AX;
+    if (Subtarget->is64Bit()) {
+      SP = X86::RSP;
+      AX = X86::RAX;
+    } else {
+      SP = X86::ESP;
+      AX = X86::EAX;
+    }
+    // __chkstk(MSVCRT): does not update stack pointer.
+    // Clobbers R10, R11 and EFLAGS.
+    BuildMI(*BB, MI, DL, TII->get(CallOp))
+      .addExternalSymbol(StackProbeSymbol)
+      .addReg(AX, RegState::Implicit)
+      .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
+    // AX has the offset to be subtracted from SP.
+    BuildMI(*BB, MI, DL, TII->get(X86::SUB64rr), SP)
+      .addReg(SP)
+      .addReg(AX);
   } else {
     BuildMI(*BB, MI, DL, TII->get(X86::CALLpcrel32))
       .addExternalSymbol(StackProbeSymbol)
