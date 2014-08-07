@@ -730,58 +730,58 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
           .setMIFlag(MachineInstr::FrameSetup);
       }
     } else {
-    const char *StackProbeSymbol;
-    unsigned CallOp;
+      const char *StackProbeSymbol;
+      unsigned CallOp;
 
-    getStackProbeFunction(STI, CallOp, StackProbeSymbol);
+      getStackProbeFunction(STI, CallOp, StackProbeSymbol);
 
-    // Check whether the accumulator register is livein for this function.
-    bool isRegAccAlive = isEAXLiveIn(MF);
-    auto RegAcc = Is64Bit ? X86::RAX : X86::EAX;
+      // Check whether the accumulator register is livein for this function.
+      bool isRegAccAlive = isEAXLiveIn(MF);
+      auto RegAcc = Is64Bit ? X86::RAX : X86::EAX;
 
-    if (isRegAccAlive) {
-      // Save RegAcc
-      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::PUSH64r : X86::PUSH32r))
-        .addReg(RegAcc, RegState::Kill)
+      if (isRegAccAlive) {
+        // Save RegAcc
+        BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::PUSH64r : X86::PUSH32r))
+          .addReg(RegAcc, RegState::Kill)
+          .setMIFlag(MachineInstr::FrameSetup);
+      }
+
+      uint64_t NumBytesAdj = isRegAccAlive ? NumBytes - (Is64Bit ? 8 : 4) :
+                                           NumBytes;
+
+      // Allocate NumBytesAdj bytes on stack in case of isRegAccAlive.
+      // We'll also use 8/4 already allocated bytes for EAX.
+      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::MOV64ri : X86::MOV32ri),
+              RegAcc)
+        .addImm(NumBytesAdj)
         .setMIFlag(MachineInstr::FrameSetup);
-    }
 
-    uint64_t NumBytesAdj = isRegAccAlive ? NumBytes - (Is64Bit ? 8 : 4) :
-                                         NumBytes;
-
-    // Allocate NumBytesAdj bytes on stack in case of isRegAccAlive.
-    // We'll also use 8/4 already allocated bytes for EAX.
-    BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::MOV64ri : X86::MOV32ri),
-            RegAcc)
-      .addImm(NumBytesAdj)
-      .setMIFlag(MachineInstr::FrameSetup);
-
-    BuildMI(MBB, MBBI, DL,
-            TII.get(CallOp))
-      .addExternalSymbol(StackProbeSymbol)
-      .addReg(StackPtr,    RegState::Define | RegState::Implicit)
-      .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit)
-      .setMIFlag(MachineInstr::FrameSetup);
-
-    if (!STI.isTargetWin32()) {
-      // MSVC x64's __chkstk and cygwin/mingw's ___chkstk_ms do not adjust %rsp
-      // themself. It also does not clobber %rax so we can reuse it when
-      // adjusting %rsp.
-      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::SUB64rr : X86::SUB32rr),
-              StackPtr)
-        .addReg(StackPtr)
-        .addReg(RegAcc)
+      BuildMI(MBB, MBBI, DL,
+              TII.get(CallOp))
+        .addExternalSymbol(StackProbeSymbol)
+        .addReg(StackPtr,    RegState::Define | RegState::Implicit)
+        .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit)
         .setMIFlag(MachineInstr::FrameSetup);
-    }
-    if (isRegAccAlive) {
-      // Restore RegAcc
-      auto MIB = BuildMI(MF, DL,
-                         TII.get(Is64Bit ? X86::MOV64rm : X86::MOV32rm),
-                         RegAcc);
-      MachineInstr *MI = addRegOffset(MIB, StackPtr, false, NumBytesAdj);
-      MI->setFlag(MachineInstr::FrameSetup);
-      MBB.insert(MBBI, MI);
-    }
+
+      if (!STI.isTargetWin32()) {
+        // MSVC x64's __chkstk and cygwin/mingw's ___chkstk_ms do not adjust %rsp
+        // themself. It also does not clobber %rax so we can reuse it when
+        // adjusting %rsp.
+        BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::SUB64rr : X86::SUB32rr),
+                StackPtr)
+          .addReg(StackPtr)
+          .addReg(RegAcc)
+          .setMIFlag(MachineInstr::FrameSetup);
+      }
+      if (isRegAccAlive) {
+        // Restore RegAcc
+        auto MIB = BuildMI(MF, DL,
+                           TII.get(Is64Bit ? X86::MOV64rm : X86::MOV32rm),
+                           RegAcc);
+        MachineInstr *MI = addRegOffset(MIB, StackPtr, false, NumBytesAdj);
+        MI->setFlag(MachineInstr::FrameSetup);
+        MBB.insert(MBBI, MI);
+      }
     }
   } else if (NumBytes) {
     emitSPUpdate(MBB, MBBI, StackPtr, -(int64_t)NumBytes, Is64Bit, Uses64BitFramePtr,
