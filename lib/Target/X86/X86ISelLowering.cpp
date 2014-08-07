@@ -20101,18 +20101,6 @@ X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
   // non-trivial part is impdef of ESP.
 
   if (!Subtarget->isTargetWin32()) {
-    if (Subtarget->isTargetCygMing()) {
-      // ___chkstk(Mingw64):
-      // Clobbers R10, R11, RAX and EFLAGS.
-      // Updates RSP.
-      BuildMI(*BB, MI, DL, TII->get(X86::W64ALLOCA))
-        .addExternalSymbol("___chkstk")
-        .addReg(X86::RAX, RegState::Implicit)
-        .addReg(X86::RSP, RegState::Implicit)
-        .addReg(X86::RAX, RegState::Define | RegState::Implicit)
-        .addReg(X86::RSP, RegState::Define | RegState::Implicit)
-        .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
-    } else {
       unsigned SP;
       unsigned AX;
       if (Subtarget->is64Bit()) {
@@ -20132,7 +20120,6 @@ X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
       BuildMI(*BB, MI, DL, TII->get(X86::SUB64rr), SP)
         .addReg(SP)
         .addReg(AX);
-    }
   } else {
     BuildMI(*BB, MI, DL, TII->get(X86::CALLpcrel32))
       .addExternalSymbol(StackProbeSymbol)

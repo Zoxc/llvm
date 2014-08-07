@@ -33,8 +33,8 @@ entry:
 
 ; M64: leaq  15(%{{.*}}), %rax
 ; M64: andq  $-16, %rax
-; M64: callq ___chkstk
-; M64-NOT:   %rsp
+; M64: callq ___chkstk_ms
+; M64: subq  %rax, %rsp
 ; M64: movq  %rsp, %rax
 
 ; W64: leaq  15(%{{.*}}), %rax
