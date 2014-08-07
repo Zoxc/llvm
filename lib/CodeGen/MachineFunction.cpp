@@ -133,6 +133,15 @@ bool MachineFunction::shouldSplitStack() {
   return getFunction()->hasFnAttribute("split-stack");
 }
 
+/// Should we be probing the stack for the function.
+/// Probing the stack means that we must read or write to the stack on every
+/// page. This is to ensure that a guard page will be hit and stack overflow
+/// can be detected. We insert instructions to do this when allocating from
+/// the stack.
+bool MachineFunction::shouldProbeStack() {
+  return getFunction()->hasFnAttribute("probe-stack");
+}
+
 /// RenumberBlocks - This discards all of the MachineBasicBlock numbers and
 /// recomputes them.  This guarantees that the MBB numbers are sequential,
 /// dense, and match the ordering of the blocks within the function.  If a

@@ -262,6 +262,13 @@ public:
   /// Should we be emitting segmented stack stuff for the function
   bool shouldSplitStack();
 
+  /// Should we be probing the stack for the function.
+  /// Probing the stack means that we must read or write to the stack on every
+  /// page. This is to ensure that a guard page will be hit and stack overflow
+  /// can be detected. We insert instructions to do this when allocating from
+  /// the stack.
+  bool shouldProbeStack();
+
   /// getNumBlockIDs - Return the number of MBB ID's allocated.
   ///
   unsigned getNumBlockIDs() const { return (unsigned)MBBNumbering.size(); }
