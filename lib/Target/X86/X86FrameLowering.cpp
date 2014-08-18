@@ -708,6 +708,28 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
   if (NumBytes >= PageSize && UseStackProbe) {
     assert(!UseRedZone && "The Red Zone is not accounted for in stack probes");
 
+    // If we only need to probe 5 pages or below, we just emit instructions to
+    // do that instead of calling the function. This is just what the loop in
+    // the called function would do. 5 probes is what GCC will do before using
+    // a loop.
+    if (NumBytes <= 5 * PageSize) {
+      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::SUB64ri32 : X86::SUB32ri),
+              StackPtr)
+          .addReg(StackPtr)
+          .addImm(NumBytes)
+        .setMIFlag(MachineInstr::FrameSetup);
+
+      for (uint64_t i = 0; i < NumBytes / PageSize; ++i) {
+        BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::OR64mi8 : X86::OR32mi8))
+          .addReg(StackPtr)
+          .addImm(1)
+          .addReg(0)
+          .addImm(NumBytes - (i + 1) * PageSize)
+          .addReg(0)
+          .addImm(0)
+          .setMIFlag(MachineInstr::FrameSetup);
+      }
+    } else {
     const char *StackProbeSymbol;
     unsigned CallOp;
 
@@ -759,6 +781,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
       MachineInstr *MI = addRegOffset(MIB, StackPtr, false, NumBytesAdj);
       MI->setFlag(MachineInstr::FrameSetup);
       MBB.insert(MBBI, MI);
+    }
     }
   } else if (NumBytes) {
     emitSPUpdate(MBB, MBBI, StackPtr, -(int64_t)NumBytes, Is64Bit, Uses64BitFramePtr,
