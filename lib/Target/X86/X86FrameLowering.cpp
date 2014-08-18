@@ -810,41 +810,41 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   if (IsWinEH && RegInfo->needsStackRealignment(MF))
     AlignedNumBytes = RoundUpToAlignment(AlignedNumBytes, MaxAlign);
   if (AlignedNumBytes >= StackProbeSize && UseStackProbe) {
-    // Check whether EAX is livein for this function.
-    bool isEAXAlive = isEAXLiveIn(MF);
+    // Check whether the accumulator register is livein for this function.
+    bool isRegAccAlive = isEAXLiveIn(MF);
+    auto RegAcc = Is64Bit ? X86::RAX : X86::EAX;
 
-    if (isEAXAlive) {
-      // Sanity check that EAX is not livein for this function.
-      // It should not be, so throw an assert.
-      assert(!Is64Bit && "EAX is livein in x64 case!");
-
-      // Save EAX
-      BuildMI(MBB, MBBI, DL, TII.get(X86::PUSH32r))
-        .addReg(X86::EAX, RegState::Kill)
+    if (isRegAccAlive) {
+      // Save RegAcc
+      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::PUSH64r : X86::PUSH32r))
+        .addReg(RegAcc, RegState::Kill)
         .setMIFlag(MachineInstr::FrameSetup);
     }
+
+    uint64_t NumBytesAdj = isRegAccAlive ? NumBytes - (Is64Bit ? 8 : 4) :
+                                         NumBytes;
 
     if (Is64Bit) {
       // Handle the 64-bit Windows ABI case where we need to call __chkstk.
       // Function prologue is responsible for adjusting the stack pointer.
-      if (isUInt<32>(NumBytes)) {
+      if (isUInt<32>(NumBytesAdj)) {
         BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
-            .addImm(NumBytes)
+            .addImm(NumBytesAdj)
             .setMIFlag(MachineInstr::FrameSetup);
-      } else if (isInt<32>(NumBytes)) {
+      } else if (isInt<32>(NumBytesAdj)) {
         BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri32), X86::RAX)
-            .addImm(NumBytes)
+            .addImm(NumBytesAdj)
             .setMIFlag(MachineInstr::FrameSetup);
       } else {
         BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri), X86::RAX)
-            .addImm(NumBytes)
+            .addImm(NumBytesAdj)
             .setMIFlag(MachineInstr::FrameSetup);
       }
     } else {
       // Allocate NumBytes-4 bytes on stack in case of isEAXAlive.
       // We'll also use 4 already allocated bytes for EAX.
       BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
-        .addImm(isEAXAlive ? NumBytes - 4 : NumBytes)
+        .addImm(NumBytesAdj)
         .setMIFlag(MachineInstr::FrameSetup);
     }
 
@@ -859,11 +859,12 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     for (; SetRAX != MBBI; ++SetRAX)
       SetRAX->setFlag(MachineInstr::FrameSetup);
 
-    if (isEAXAlive) {
-      // Restore EAX
-      MachineInstr *MI = addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm),
-                                              X86::EAX),
-                                      StackPtr, false, NumBytes - 4);
+    if (isRegAccAlive) {
+      // Restore RegAcc
+      auto MIB = BuildMI(MF, DL,
+                         TII.get(Is64Bit ? X86::MOV64rm : X86::MOV32rm),
+                         RegAcc);
+      MachineInstr *MI = addRegOffset(MIB, StackPtr, false, NumBytesAdj);
       MI->setFlag(MachineInstr::FrameSetup);
       MBB.insert(MBBI, MI);
     }
