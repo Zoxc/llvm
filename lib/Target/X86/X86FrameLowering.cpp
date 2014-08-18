@@ -613,6 +613,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     X86FI->setCalleeSavedFrameSize(
       X86FI->getCalleeSavedFrameSize() - TailCallReturnAddrDelta);
 
+  bool UseRedZone = false;
   bool UseStackProbe = (STI.isOSWindows() && !STI.isTargetMachO()) ||
                        MF.shouldProbeStack();
 
@@ -634,12 +635,19 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       !MFI->hasVarSizedObjects() && // No dynamic alloca.
       !MFI->adjustsStack() &&       // No calls.
       !IsWin64 &&                   // Win64 has no Red Zone
+
+      !(UseStackProbe && StackSize > 128) && // Only use the Red Zone if we can
+                                             // fit the whole stack in it
+                                             // and thus stack probes won't be
+                                             // needed
+
       !usesTheStack(MF) &&          // Don't push and pop.
       !MF.shouldSplitStack()) {     // Regular stack
     uint64_t MinSize = X86FI->getCalleeSavedFrameSize();
     if (HasFP) MinSize += SlotSize;
     StackSize = std::max(MinSize, StackSize > 128 ? StackSize - 128 : 0);
     MFI->setStackSize(StackSize);
+    UseRedZone = true;
   }
 
   // Insert stack pointer adjustment for later moving of return addr.  Only
@@ -810,6 +818,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   if (IsWinEH && RegInfo->needsStackRealignment(MF))
     AlignedNumBytes = RoundUpToAlignment(AlignedNumBytes, MaxAlign);
   if (AlignedNumBytes >= StackProbeSize && UseStackProbe) {
+    assert(!UseRedZone && "The Red Zone is not accounted for in stack probes");
     // Check whether the accumulator register is livein for this function.
     bool isRegAccAlive = isEAXLiveIn(MF);
     auto RegAcc = Is64Bit ? X86::RAX : X86::EAX;
