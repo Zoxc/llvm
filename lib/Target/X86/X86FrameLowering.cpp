@@ -357,7 +357,14 @@ static bool usesTheStack(const MachineFunction &MF) {
 void X86FrameLowering::getStackProbeFunction(const X86Subtarget &STI,
                                              unsigned &CallOp,
                                              const char *&Symbol) {
-  CallOp = STI.is64Bit() ? X86::W64ALLOCA : X86::CALLpcrel32;
+  CallOp = STI.is64Bit() ? (STI.isOSWindows() ? X86::W64ALLOCA :
+                                                X86::CALL64pcrel32) :
+                           X86::CALLpcrel32;
+
+  if (!STI.isOSWindows()) {
+    Symbol = "__probestack";
+    return;
+  }
 
   if (STI.is64Bit()) {
     if (STI.isTargetCygMing()) {
@@ -504,8 +511,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
     X86FI->setCalleeSavedFrameSize(
       X86FI->getCalleeSavedFrameSize() - TailCallReturnAddrDelta);
 
-  bool UseStackProbe = (STI.isOSWindows() && !STI.isTargetMacho());
-  
+  bool UseStackProbe = (STI.isOSWindows() && !STI.isTargetMacho()) ||
+                       MF.shouldProbeStack();
+
   // If this is x86-64 and the Red Zone is not disabled, if we are a leaf
   // function, and use up to 128 bytes of stack space, don't have a frame
   // pointer, calls, or dynamic alloca then we do not need to adjust the
@@ -730,13 +738,14 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
       .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit)
       .setMIFlag(MachineInstr::FrameSetup);
 
-    if (Is64Bit) {
+    if (!STI.isTargetWin32()) {
       // MSVC x64's __chkstk and cygwin/mingw's ___chkstk_ms do not adjust %rsp
       // themself. It also does not clobber %rax so we can reuse it when
       // adjusting %rsp.
-      BuildMI(MBB, MBBI, DL, TII.get(X86::SUB64rr), StackPtr)
+      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::SUB64rr : X86::SUB32rr),
+              StackPtr)
         .addReg(StackPtr)
-        .addReg(X86::RAX)
+        .addReg(Is64Bit ? X86::RAX : X86::EAX)
         .setMIFlag(MachineInstr::FrameSetup);
     }
     if (isEAXAlive) {

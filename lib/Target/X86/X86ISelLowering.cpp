@@ -17,6 +17,7 @@
 #include "X86CallingConv.h"
 #include "X86InstrBuilder.h"
 #include "X86MachineFunctionInfo.h"
+#include "X86FrameLowering.h"
 #include "X86TargetMachine.h"
 #include "X86TargetObjectFile.h"
 #include "llvm/ADT/SmallBitVector.h"
@@ -15772,7 +15773,7 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
   MachineFunction &MF = DAG.getMachineFunction();
   bool SplitStack = MF.shouldSplitStack();
   bool Lower = (Subtarget->isOSWindows() && !Subtarget->isTargetMacho()) ||
-               SplitStack;
+               SplitStack || MF.shouldProbeStack();
   SDLoc dl(Op);
 
   if (!Lower) {
@@ -20089,10 +20090,17 @@ X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
 
   assert(!Subtarget->isTargetMacho());
 
+  const char *StackProbeSymbol;
+  unsigned CallOp;
+
+  X86FrameLowering::getStackProbeFunction(*Subtarget,
+                                          CallOp,
+                                          StackProbeSymbol);
+
   // The lowering is pretty easy: we're just emitting the call to _alloca.  The
   // non-trivial part is impdef of ESP.
 
-  if (Subtarget->isTargetWin64()) {
+  if (!Subtarget->isTargetWin32()) {
     if (Subtarget->isTargetCygMing()) {
       // ___chkstk(Mingw64):
       // Clobbers R10, R11, RAX and EFLAGS.
@@ -20105,21 +20113,27 @@ X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
         .addReg(X86::RSP, RegState::Define | RegState::Implicit)
         .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
     } else {
+      unsigned SP;
+      unsigned AX;
+      if (Subtarget->is64Bit()) {
+        SP = X86::RSP;
+        AX = X86::RAX;
+      } else {
+        SP = X86::ESP;
+        AX = X86::EAX;
+      }
       // __chkstk(MSVCRT): does not update stack pointer.
       // Clobbers R10, R11 and EFLAGS.
-      BuildMI(*BB, MI, DL, TII->get(X86::W64ALLOCA))
-        .addExternalSymbol("__chkstk")
-        .addReg(X86::RAX, RegState::Implicit)
+      BuildMI(*BB, MI, DL, TII->get(CallOp))
+        .addExternalSymbol(StackProbeSymbol)
+        .addReg(AX, RegState::Implicit)
         .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
-      // RAX has the offset to be subtracted from RSP.
-      BuildMI(*BB, MI, DL, TII->get(X86::SUB64rr), X86::RSP)
-        .addReg(X86::RSP)
-        .addReg(X86::RAX);
+      // AX has the offset to be subtracted from SP.
+      BuildMI(*BB, MI, DL, TII->get(X86::SUB64rr), SP)
+        .addReg(SP)
+        .addReg(AX);
     }
   } else {
-    const char *StackProbeSymbol =
-      Subtarget->isTargetKnownWindowsMSVC() ? "_chkstk" : "_alloca";
-
     BuildMI(*BB, MI, DL, TII->get(X86::CALLpcrel32))
       .addExternalSymbol(StackProbeSymbol)
       .addReg(X86::EAX, RegState::Implicit)
