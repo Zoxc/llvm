@@ -420,6 +420,10 @@ void X86FrameLowering::emitStackProbeCall(MachineFunction &MF,
   else
     Symbol = "_chkstk";
 
+  if (!STI.isOSWindows()) {
+    Symbol = "__probestack";
+  }
+
   MachineInstrBuilder CI;
 
   // All current stack probes take AX and SP as input, clobber flags, and
@@ -442,13 +446,14 @@ void X86FrameLowering::emitStackProbeCall(MachineFunction &MF,
       .addReg(SP, RegState::Define | RegState::Implicit)
       .addReg(X86::EFLAGS, RegState::Define | RegState::Implicit);
 
-  if (Is64Bit) {
+  if (!STI.isTargetWin32()) {
     // MSVC x64's __chkstk and cygwin/mingw's ___chkstk_ms do not adjust %rsp
     // themselves. It also does not clobber %rax so we can reuse it when
     // adjusting %rsp.
-    BuildMI(MBB, MBBI, DL, TII.get(X86::SUB64rr), X86::RSP)
-        .addReg(X86::RSP)
-        .addReg(X86::RAX);
+    BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::SUB64rr : X86::SUB32rr),
+            SP)
+      .addReg(SP)
+      .addReg(AX);
   }
 }
 
@@ -608,7 +613,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     X86FI->setCalleeSavedFrameSize(
       X86FI->getCalleeSavedFrameSize() - TailCallReturnAddrDelta);
 
-  bool UseStackProbe = (STI.isOSWindows() && !STI.isTargetMachO());
+  bool UseStackProbe = (STI.isOSWindows() && !STI.isTargetMachO()) ||
+                       MF.shouldProbeStack();
 
   // The default stack probe size is 4096 if the function has no stackprobesize
   // attribute.
