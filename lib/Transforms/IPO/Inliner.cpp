@@ -139,6 +139,12 @@ static bool InlineCallIfPossible(CallSite CS, InlineFunctionInfo &IFI,
 
   AdjustCallerSSPLevel(Caller, Callee);
 
+  // If the callee requires stack probes, we ensure that the caller will
+  // require those too
+  if (Callee->hasFnAttribute("probe-stack")) {
+    Caller->addFnAttr("probe-stack");
+  }
+
   // Look at all of the allocas that we inlined through this call site.  If we
   // have already inlined other allocas through other calls into this function,
   // then we know that they have disjoint lifetimes and that we can merge them.
