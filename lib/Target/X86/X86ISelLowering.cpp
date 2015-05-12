@@ -14889,7 +14889,7 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
   MachineFunction &MF = DAG.getMachineFunction();
   bool SplitStack = MF.shouldSplitStack();
   bool Lower = (Subtarget->isOSWindows() && !Subtarget->isTargetMachO()) ||
-               SplitStack;
+               SplitStack || MF.shouldProbeStack();
   SDLoc dl(Op);
 
   if (!Lower) {
@@ -14967,6 +14967,14 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
 
     Chain = DAG.getCopyToReg(Chain, dl, Reg, Size, Flag);
     Flag = Chain.getValue(1);
+
+    if (!Subtarget->isOSWindows()) {
+        const unsigned Reg = (Subtarget->isTarget64BitLP64() ? X86::RBX : X86::EBX);
+
+        Chain = DAG.getCopyToReg(Chain, dl, Reg, DAG.getConstant(0x1000, dl, SPTy), Flag);
+        Flag = Chain.getValue(1);
+    }
+
     SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
 
     Chain = DAG.getNode(X86ISD::WIN_ALLOCA, dl, NodeTys, Chain, Flag);
@@ -20433,8 +20441,6 @@ MachineBasicBlock *
 X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
                                         MachineBasicBlock *BB) const {
   DebugLoc DL = MI->getDebugLoc();
-
-  assert(!Subtarget->isTargetMachO());
 
   Subtarget->getFrameLowering()->emitStackProbeCall(*BB->getParent(), *BB, MI,
                                                     DL);
