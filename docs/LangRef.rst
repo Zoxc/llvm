@@ -1302,6 +1302,15 @@ example:
     passes make choices that keep the code size of this function low,
     and otherwise do optimizations specifically to reduce code size as
     long as they do not significantly impact runtime performance.
+``"probe-stack"``
+    This attribute indicates that the function will trigger a guard region
+    in the end of the stack. It ensures that accesses to the stack must be
+    no further apart than the size of the guard region to a previous
+    access of the stack.
+
+    If a function that has a ``"probe-stack"`` attribute is inlined into a
+    function that doesn't have a ``"probe-stack"`` attribute, then the
+    resulting function will have a ``"probe-stack"`` attribute.
 ``readnone``
     On a function, this attribute indicates that the function computes its
     result (or decides to unwind an exception) based strictly on its arguments,
