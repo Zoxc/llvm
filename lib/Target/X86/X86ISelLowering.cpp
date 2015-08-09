@@ -14892,6 +14892,8 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
                SplitStack || MF.shouldProbeStack();
   SDLoc dl(Op);
 
+  const TargetFrameLowering &TFI = *Subtarget->getFrameLowering();
+
   if (!Lower) {
     const TargetLowering &TLI = DAG.getTargetLoweringInfo();
     SDNode* Node = Op.getNode();
@@ -14914,7 +14916,6 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
     SDValue SP = DAG.getCopyFromReg(Chain, dl, SPReg, VT);
     Chain = SP.getValue(1);
     unsigned Align = cast<ConstantSDNode>(Tmp3)->getZExtValue();
-    const TargetFrameLowering &TFI = *Subtarget->getFrameLowering();
     unsigned StackAlign = TFI.getStackAlignment();
     Tmp1 = DAG.getNode(ISD::SUB, dl, VT, SP, Size); // Value
     if (Align > StackAlign)
@@ -14934,7 +14935,6 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
   SDValue Chain = Op.getOperand(0);
   SDValue Size  = Op.getOperand(1);
   unsigned Align = cast<ConstantSDNode>(Op.getOperand(2))->getZExtValue();
-  EVT VT = Op.getNode()->getValueType(0);
 
   bool Is64Bit = Subtarget->is64Bit();
   MVT SPTy = getPointerTy(DAG.getDataLayout());
@@ -14962,7 +14962,14 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
     SDValue Ops1[2] = { Value, Chain };
     return DAG.getMergeValues(Ops1, dl);
   } else {
+    unsigned StackAlign = TFI.getStackAlignment();
     SDValue Flag;
+    if (Align > StackAlign) {
+      Size = DAG.getNode(ISD::ADD, dl, SPTy, Size, DAG.getIntPtrConstant(Align - 1, dl));
+      Size = DAG.getNode(ISD::AND, dl, SPTy, Size,
+                         DAG.getIntPtrConstant(~(uint64_t)(Align - 1), dl));
+    }
+
     const unsigned Reg = (Subtarget->isTarget64BitLP64() ? X86::RAX : X86::EAX);
 
     Chain = DAG.getCopyToReg(Chain, dl, Reg, Size, Flag);
@@ -14983,12 +14990,6 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
     unsigned SPReg = RegInfo->getStackRegister();
     SDValue SP = DAG.getCopyFromReg(Chain, dl, SPReg, SPTy);
     Chain = SP.getValue(1);
-
-    if (Align) {
-      SP = DAG.getNode(ISD::AND, dl, VT, SP.getValue(0),
-                       DAG.getConstant(-(uint64_t)Align, dl, VT));
-      Chain = DAG.getCopyToReg(Chain, dl, SPReg, SP);
-    }
 
     SDValue Ops1[2] = { SP, Chain };
     return DAG.getMergeValues(Ops1, dl);

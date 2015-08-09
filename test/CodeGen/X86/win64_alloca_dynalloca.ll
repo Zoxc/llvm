@@ -95,21 +95,17 @@ entry:
 
   %buf1 = alloca i8, i64 %n, align 128
 
-; M64: leaq  15(%{{.*}}), %rax
-; M64: andq  $-16, %rax
+; M64: addq  $127, %rax
+; M64: andq  $-128, %rax
 ; M64: callq ___chkstk_ms
 ; M64: subq  %rax, %rsp
 ; M64: movq  %rsp, [[R2:%r.*]]
-; M64: andq  $-128, [[R2]]
-; M64: movq  [[R2]], %rsp
 
-; W64: leaq  15(%{{.*}}), %rax
-; W64: andq  $-16, %rax
+; W64: addq  $127, %rax
+; W64: andq  $-128, %rax
 ; W64: callq __chkstk
 ; W64: subq  %rax, %rsp
 ; W64: movq  %rsp, [[R2:%r.*]]
-; W64: andq  $-128, [[R2]]
-; W64: movq  [[R2]], %rsp
 
 ; EFI: leaq  15(%{{.*}}), [[R1:%r.*]]
 ; EFI: andq  $-16, [[R1]]
