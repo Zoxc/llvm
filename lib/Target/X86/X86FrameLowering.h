@@ -47,11 +47,26 @@ public:
 
   unsigned StackPtr;
 
+  void pushRegForStackProbeCall(MachineFunction &MF,
+                                MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator MBBI,
+                                DebugLoc DL,
+                                bool &IsAlive,
+                                unsigned RegType,
+                                uint64_t &NumBytes) const;
+  void popRegForStackProbeCall(MachineFunction &MF,
+                               MachineBasicBlock &MBB,
+                               MachineBasicBlock::iterator MBBI,
+                               DebugLoc DL,
+                               bool &IsAlive,
+                               unsigned RegType,
+                               uint64_t &NumBytes) const;
   /// Emit a call to the target's stack probe function. This is required for all
   /// large stack allocations on Windows. The caller is required to materialize
   /// the number of bytes to probe in RAX/EAX.
-  void emitStackProbeCall(MachineFunction &MF, MachineBasicBlock &MBB,
-                          MachineBasicBlock::iterator MBBI, DebugLoc DL) const;
+  MachineInstr *emitStackProbes(MachineFunction &MF, MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator MBBI, DebugLoc DL,
+                                bool InProlog) const;
 
   void emitCalleeSavedFrameMoves(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MBBI,
@@ -59,7 +74,7 @@ public:
 
   /// emitProlog/emitEpilog - These methods insert prolog and epilog code into
   /// the function.
-  void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
+  void emitPrologue(MachineFunction &MF, MachineBasicBlock &InMBB) const override;
   void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
 
   void adjustForSegmentedStacks(MachineFunction &MF,

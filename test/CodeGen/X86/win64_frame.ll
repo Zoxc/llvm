@@ -103,7 +103,7 @@ define i32 @f8(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e) "no-frame-pointer-elim"="
   ; CHECK:        leaq    15(,%rax,4), %rcx
   ; CHECK:        movabsq $34359738352, %rax
   ; CHECK:        andq    %rcx, %rax
-  ; CHECK:        callq   __chkstk
+  ; CHECK:        or{{.}}     $0, {{.*}}
   ; CHECK:        subq    %rax, %rsp
 
   %gep = getelementptr [300 x i8], [300 x i8]* %alloca, i32 0, i32 0

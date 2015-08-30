@@ -67,7 +67,6 @@ entry:
 
 ; If we have a reserved frame, we should have pushes
 ; NORMAL-LABEL: test2:
-; NORMAL-NOT: subl {{.*}} %esp
 ; NORMAL: pushl   $4
 ; NORMAL-NEXT: pushl   $3
 ; NORMAL-NEXT: pushl   $2

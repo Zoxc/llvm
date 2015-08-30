@@ -15047,7 +15047,7 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
   MachineFunction &MF = DAG.getMachineFunction();
   bool SplitStack = MF.shouldSplitStack();
   bool Lower = (Subtarget->isOSWindows() && !Subtarget->isTargetMachO()) ||
-               SplitStack;
+               SplitStack || MF.shouldProbeStack();
   SDLoc dl(Op);
 
   if (!Lower) {
@@ -15125,6 +15125,7 @@ X86TargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
 
     Chain = DAG.getCopyToReg(Chain, dl, Reg, Size, Flag);
     Flag = Chain.getValue(1);
+
     SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
 
     Chain = DAG.getNode(X86ISD::WIN_ALLOCA, dl, NodeTys, Chain, Flag);
@@ -20622,14 +20623,12 @@ MachineBasicBlock *
 X86TargetLowering::EmitLoweredWinAlloca(MachineInstr *MI,
                                         MachineBasicBlock *BB) const {
   DebugLoc DL = MI->getDebugLoc();
-
-  assert(!Subtarget->isTargetMachO());
-
-  Subtarget->getFrameLowering()->emitStackProbeCall(*BB->getParent(), *BB, MI,
-                                                    DL);
-
+  MachineInstr *ResumeMI =
+    Subtarget->getFrameLowering()->emitStackProbes(*BB->getParent(), *BB, MI,
+                                                    DL, false);
+  MachineBasicBlock *ResumeBB = ResumeMI->getParent();
   MI->eraseFromParent();   // The pseudo instruction is gone now.
-  return BB;
+  return ResumeBB;
 }
 
 MachineBasicBlock *

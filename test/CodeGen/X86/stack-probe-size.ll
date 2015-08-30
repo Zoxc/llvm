@@ -11,17 +11,6 @@
 
 target datalayout = "e-m:w-p:32:32-i64:64-f80:32-n8:16:32-S32"
 
-define i32 @test1() "stack-probe-size"="0" {
-  %buffer = alloca [4095 x i8]
-
-  ret i32 0
-
-; CHECK-LABEL: _test1:
-; CHECK-NOT: subl $4095, %esp
-; CHECK: movl $4095, %eax
-; CHECK: calll __chkstk
-}
-
 define i32 @test2() {
   %buffer = alloca [4095 x i8]
 
@@ -30,7 +19,7 @@ define i32 @test2() {
 ; CHECK-LABEL: _test2:
 ; CHECK-NOT: movl $4095, %eax
 ; CHECK: subl $4095, %esp
-; CHECK-NOT: calll __chkstk
+; CHECK-NOT: or{{.}}     $0, {{.*}}
 }
 
 define i32 @test3() "stack-probe-size"="8192" {
@@ -41,7 +30,7 @@ define i32 @test3() "stack-probe-size"="8192" {
 ; CHECK-LABEL: _test3:
 ; CHECK-NOT: movl $4095, %eax
 ; CHECK: subl $4095, %esp
-; CHECK-NOT: calll __chkstk
+; CHECK-NOT: or{{.}}     $0, {{.*}}
 }
 
 define i32 @test4() "stack-probe-size"="0" {
@@ -51,8 +40,7 @@ define i32 @test4() "stack-probe-size"="0" {
 
 ; CHECK-LABEL: _test4:
 ; CHECK-NOT: subl $4096, %esp
-; CHECK: movl $4096, %eax
-; CHECK: calll __chkstk
+; CHECK: or{{.}}     $0, {{.*}}
 }
 
 define i32 @test5() {
@@ -62,8 +50,7 @@ define i32 @test5() {
 
 ; CHECK-LABEL: _test5:
 ; CHECK-NOT: subl $4096, %esp
-; CHECK: movl $4096, %eax
-; CHECK: calll __chkstk
+; CHECK: or{{.}}     $0, {{.*}}
 }
 
 define i32 @test6() "stack-probe-size"="8192" {
@@ -74,5 +61,5 @@ define i32 @test6() "stack-probe-size"="8192" {
 ; CGECK-LABEL: _test6:
 ; CGECK-NOT: movl $4096, %eax
 ; CGECK: subl $4096, %esp
-; CGECK-NOT: calll __chkstk
+; CGECK-NOT: or{{.}}     $0, {{.*}}
 }

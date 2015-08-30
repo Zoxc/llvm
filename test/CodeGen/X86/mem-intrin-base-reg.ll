@@ -65,7 +65,7 @@ spill_vectors:
 ; CHECK: movl %esp, %esi
 ; CHECK: pushl $128
 ; CHECK: calll _memcpy
-; CHECK: calll __chkstk
+; CHECK: or{{.}}     $0, {{.*}}
 
 ; stosd doesn't clobber esi, so we can use it.
 

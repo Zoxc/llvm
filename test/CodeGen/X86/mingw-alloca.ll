@@ -6,9 +6,9 @@ target datalayout = "e-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:32:64-f3
 define void @foo1(i32 %N) nounwind {
 entry:
 ; COFF: _foo1:
-; COFF: calll __alloca
+; COFF: or{{.}}     $0, {{.*}}
 ; ELF: foo1:
-; ELF: calll _alloca
+; ELF: or{{.}}     $0, {{.*}}
 	%tmp14 = alloca i32, i32 %N		; <i32*> [#uses=1]
 	call void @bar1( i32* %tmp14 )
 	ret void
@@ -20,14 +20,10 @@ define void @foo2(i32 inreg  %N) nounwind {
 entry:
 ; COFF: _foo2:
 ; COFF: andl $-16, %esp
-; COFF: pushl %eax
-; COFF: calll __alloca
-; COFF: movl	8028(%esp), %eax
+; COFF: or{{.}}     $0, {{.*}}
 ; ELF: foo2:
 ; ELF: andl $-16, %esp
-; ELF: pushl %eax
-; ELF: calll _alloca
-; ELF: movl	8028(%esp), %eax
+; ELF: or{{.}}     $0, {{.*}}
 	%A2 = alloca [2000 x i32], align 16		; <[2000 x i32]*> [#uses=1]
 	%A2.sub = getelementptr [2000 x i32], [2000 x i32]* %A2, i32 0, i32 0		; <i32*> [#uses=1]
 	call void @bar2( i32* %A2.sub, i32 %N )

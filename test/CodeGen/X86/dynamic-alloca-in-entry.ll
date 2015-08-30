@@ -6,7 +6,7 @@ define void @foo(i32 %n) {
   ret void
 }
 ; CHECK-LABEL: _foo:
-; CHECK: calll __chkstk
+; CHECK: or{{.}}     $0, {{.*}}
 ; CHECK: retl
 
 ; Use of inalloca implies that that the alloca is not static.
@@ -15,5 +15,5 @@ define void @bar() {
   ret void
 }
 ; CHECK-LABEL: _bar:
-; CHECK: calll __chkstk
+; CHECK: or{{.}}     $0, {{.*}}
 ; CHECK: retl

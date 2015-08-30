@@ -12,5 +12,4 @@ entry:
   ret void
 }
 
-; CHECK: __chkstk
-
+; CHECK: orl     $0, (%{{.*}})

@@ -9,7 +9,7 @@ define void @g() {
 ; CHECK-LABEL: _g:
   %b = alloca inalloca %Foo
 ; CHECK: movl    $8, %eax
-; CHECK: calll   __chkstk
+; CHECK: or{{.}}     $0, {{.*}}
   %f1 = getelementptr %Foo, %Foo* %b, i32 0, i32 0
   %f2 = getelementptr %Foo, %Foo* %b, i32 0, i32 1
   store i32 13, i32* %f1
