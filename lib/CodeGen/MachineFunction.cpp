@@ -147,6 +147,10 @@ bool MachineFunction::shouldSplitStack() {
   return getFunction()->hasFnAttribute("split-stack");
 }
 
+bool MachineFunction::shouldProbeStack() const {
+  return getFunction()->hasFnAttribute("probe-stack");
+}
+
 /// This discards all of the MachineBasicBlock numbers and recomputes them.
 /// This guarantees that the MBB numbers are sequential, dense, and match the
 /// ordering of the blocks within the function.  If a specific MachineBasicBlock

@@ -773,6 +773,10 @@ void PEI::insertPrologEpilogCode(MachineFunction &Fn) {
   // Add prologue to the function...
   TFI.emitPrologue(Fn, *SaveBlock);
 
+  // RestoreBlocks can be clobbered by emitPrologue. Recalculate it.
+  RestoreBlocks.clear();
+  calculateSets(Fn);
+
   // Add epilogue to restore the callee-save registers in each exiting block.
   for (MachineBasicBlock *RestoreBlock : RestoreBlocks)
     TFI.emitEpilogue(Fn, *RestoreBlock);
