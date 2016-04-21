@@ -193,12 +193,13 @@ static unsigned findDeadCallerSavedReg(MachineBasicBlock &MBB,
   return 0;
 }
 
-static bool isEAXLiveIn(MachineBasicBlock &MBB) {
+static bool isLiveIn(MachineBasicBlock &MBB, unsigned CheckReg) {
+  CheckReg = getX86SubSuperRegister(CheckReg, 32);
+
   for (MachineBasicBlock::RegisterMaskPair RegMask : MBB.liveins()) {
     unsigned Reg = RegMask.PhysReg;
 
-    if (Reg == X86::RAX || Reg == X86::EAX || Reg == X86::AX ||
-        Reg == X86::AH || Reg == X86::AL)
+    if (getX86SubSuperRegisterOrZero(Reg, 32) == CheckReg)
       return true;
   }
 
@@ -261,7 +262,7 @@ void X86FrameLowering::emitSPUpdate(MachineBasicBlock &MBB,
       // load the offset into a register and do one sub/add
       unsigned Reg = 0;
 
-      if (isSub && !isEAXLiveIn(MBB))
+      if (isSub && !isLiveIn(MBB, X86::EAX))
         Reg = (unsigned)(Is64Bit ? X86::RAX : X86::EAX);
       else
         Reg = findDeadCallerSavedReg(MBB, MBBI, TRI, Is64Bit);
@@ -456,6 +457,12 @@ MachineInstr *X86FrameLowering::emitStackProbe(MachineFunction &MF,
     } else {
       return emitStackProbeInline(MF, MBB, MBBI, DL, false);
     }
+  } else if (!(STI.isOSWindows() && !STI.isTargetMachO())) {
+    if (InProlog) {
+      return emitStackProbeInlineStub(MF, MBB, MBBI, DL, true);
+    } else {
+      return emitStackProbes(MF, MBB, MBBI, DL, false);
+    }
   } else {
     return emitStackProbeCall(MF, MBB, MBBI, DL, InProlog);
   }
@@ -481,7 +488,11 @@ void X86FrameLowering::inlineStackProbe(MachineFunction &MF,
     assert(std::prev(MBBI).operator==(ChkStkStub) &&
       "MBBI expected after __chkstk_stub.");
     DebugLoc DL = PrologMBB.findDebugLoc(MBBI);
-    emitStackProbeInline(MF, PrologMBB, MBBI, DL, true);
+    if (STI.isOSWindows() && !STI.isTargetMachO()) {
+      emitStackProbeInline(MF, PrologMBB, MBBI, DL, true);
+    } else {
+      emitStackProbes(MF, PrologMBB, MBBI, DL, true);
+    }
     ChkStkStub->eraseFromParent();
   }
 }
@@ -778,6 +789,199 @@ MachineInstr *X86FrameLowering::emitStackProbeInlineStub(
   return MBBI;
 }
 
+void X86FrameLowering::pushRegForStackProbeCall(MachineFunction &MF,
+                                                MachineBasicBlock &MBB,
+                                                MachineBasicBlock::iterator MBBI,
+                                                DebugLoc DL,
+                                                bool &IsAlive,
+                                                unsigned RegType,
+                                                uint64_t &NumBytes) const {
+  IsAlive = isLiveIn(MBB, RegType);
+
+  if (!IsAlive) {
+    return;
+  }
+
+  auto Reg = getX86SubSuperRegister(RegType, Is64Bit ? 64 : 32);
+
+  // Save the register on the stack.
+  BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::PUSH64r : X86::PUSH32r))
+      .addReg(Reg, RegState::Kill)
+      .setMIFlag(MachineInstr::FrameSetup);
+
+  // Reuse the space from the spill as a stack allocation.
+  NumBytes -= SlotSize;
+}
+
+void X86FrameLowering::popRegForStackProbeCall(MachineFunction &MF,
+                                                MachineBasicBlock &MBB,
+                                                MachineBasicBlock::iterator MBBI,
+                                                DebugLoc DL,
+                                                bool &IsAlive,
+                                                unsigned RegType,
+                                                uint64_t &NumBytes) const {
+  if (!IsAlive) {
+    return;
+  }
+
+  // Restore the register from the stack slot.
+
+  auto Reg = getX86SubSuperRegister(RegType, Is64Bit ? 64 : 32);
+
+  auto MIB = BuildMI(MF, DL,
+                     TII.get(Is64Bit ? X86::MOV64rm : X86::MOV32rm),
+                     Reg);
+  MachineInstr *MI = addRegOffset(MIB, StackPtr, false, NumBytes);
+  MI->setFlag(MachineInstr::FrameSetup);
+  MBB.insert(MBBI, MI);
+
+  NumBytes += SlotSize;
+}
+
+MachineInstr *X86FrameLowering::emitStackProbes(MachineFunction &MF,
+                                                MachineBasicBlock &MBB,
+                                                MachineBasicBlock::iterator MBBI,
+                                                DebugLoc DL,
+                                                bool InProlog) const {
+  const X86Subtarget &STI = MF.getSubtarget<X86Subtarget>();
+  const TargetInstrInfo &TII = *STI.getInstrInfo();
+  const BasicBlock *LLVM_BB = MBB.getBasicBlock();
+
+  // RAX contains the number of bytes of desired stack adjustment.
+  // The handling here assumes this value has already been updated so as to
+  // maintain stack alignment.
+  //
+  // We need to exit with RSP modified by this amount and execute suitable
+  // page touches to notify the OS that we're growing the stack responsibly.
+  // All stack probing must be done without modifying RSP.
+
+  // Set up the new basic blocks
+  MachineBasicBlock *LoopMBB = MF.CreateMachineBasicBlock(LLVM_BB);
+  MachineBasicBlock *ContinueMBB = MF.CreateMachineBasicBlock(LLVM_BB);
+
+  MachineFunction::iterator MBBIter = std::next(MBB.getIterator());
+
+  MF.insert(MBBIter, LoopMBB);
+  MF.insert(MBBIter, ContinueMBB);
+
+  // Split MBB and move the tail portion down to ContinueMBB.
+  MachineBasicBlock::iterator BeforeMBBI = std::prev(MBBI);
+  ContinueMBB->splice(ContinueMBB->begin(), &MBB, MBBI, MBB.end());
+  ContinueMBB->transferSuccessorsAndUpdatePHIs(&MBB);
+
+  const int64_t GuardSize = 0x1000;
+
+  auto RType = Is64Bit ? 64 : 32;
+
+  auto InputReg = getX86SubSuperRegister(X86::RAX, RType);
+
+  // Registers we need. For the normal case we use virtual
+  // registers. For the prolog expansion we use RAX, RCX and RDX.
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  const TargetRegisterClass *RegClass = Is64Bit ? &X86::GR64RegClass : &X86::GR32RegClass;
+  unsigned
+      SizeReg = InProlog ? InputReg :
+                           MRI.createVirtualRegister(RegClass),
+      StackReg = InProlog ? getX86SubSuperRegister(X86::RCX, RType) :
+                            MRI.createVirtualRegister(RegClass),
+      CountReg = InProlog ? getX86SubSuperRegister(X86::RDX, RType) :
+                            MRI.createVirtualRegister(RegClass),
+      PStackReg = InProlog ? getX86SubSuperRegister(X86::RCX, RType) :
+                            MRI.createVirtualRegister(RegClass),
+      PCountReg = InProlog ? getX86SubSuperRegister(X86::RDX, RType) :
+                            MRI.createVirtualRegister(RegClass),
+      LStackReg = InProlog ? getX86SubSuperRegister(X86::RCX, RType) :
+                            MRI.createVirtualRegister(RegClass),
+      LCountReg = InProlog ? getX86SubSuperRegister(X86::RDX, RType) :
+                            MRI.createVirtualRegister(RegClass);
+
+  auto SPReg = getX86SubSuperRegister(X86::RSP, RType);
+
+  if (InProlog) {
+    ContinueMBB->addLiveIn((MCPhysReg)InputReg);
+    LoopMBB->addLiveIn((MCPhysReg)InputReg);
+    LoopMBB->addLiveIn((MCPhysReg)LCountReg);
+    LoopMBB->addLiveIn((MCPhysReg)LStackReg);
+
+    for (MachineBasicBlock::livein_iterator i = MBB.livein_begin(),
+                                            e = MBB.livein_end();
+         i != e; i++) {
+      if (!LoopMBB->isLiveIn(i->PhysReg, i->LaneMask))
+        LoopMBB->addLiveIn(*i);
+      if (!ContinueMBB->isLiveIn(i->PhysReg, i->LaneMask))
+        ContinueMBB->addLiveIn(*i);
+    }
+  } else {
+    BuildMI(&MBB, DL, TII.get(X86::COPY), SizeReg).addReg(InputReg);
+  }
+
+  BuildMI(&MBB, DL, TII.get(Is64Bit ? X86::MOV64rr : X86::MOV32rr), CountReg).addReg(SizeReg);
+  BuildMI(&MBB, DL, TII.get(Is64Bit ? X86::MOV64rr : X86::MOV32rr), StackReg).addReg(SPReg);
+
+  if (!InProlog) {
+    BuildMI(LoopMBB, DL, TII.get(X86::PHI), PCountReg)
+        .addReg(CountReg)
+        .addMBB(&MBB)
+        .addReg(LCountReg)
+        .addMBB(LoopMBB);
+    BuildMI(LoopMBB, DL, TII.get(X86::PHI), PStackReg)
+        .addReg(StackReg)
+        .addMBB(&MBB)
+        .addReg(LStackReg)
+        .addMBB(LoopMBB);
+  }
+
+  BuildMI(LoopMBB, DL, TII.get(Is64Bit ? X86::OR64mi8 : X86::OR32mi8))
+    .addReg(PStackReg)
+    .addImm(1)
+    .addReg(0)
+    .addImm(0)
+    .addReg(0)
+    .addImm(0);
+
+  BuildMI(LoopMBB, DL, TII.get(Is64Bit ? X86::SUB64ri32 : X86::SUB32ri),
+          LStackReg)
+      .addReg(PStackReg)
+      .addImm(GuardSize);
+
+  BuildMI(LoopMBB, DL, TII.get(Is64Bit ? X86::SUB64ri32 : X86::SUB32ri),
+          LCountReg)
+      .addReg(PCountReg)
+      .addImm(GuardSize);
+
+  BuildMI(LoopMBB, DL, TII.get(X86::JAE_1)).addMBB(LoopMBB);
+
+  MachineBasicBlock::iterator ContinueMBBI = ContinueMBB->getFirstNonPHI();
+
+  // Now that the probing is done, add code to continueMBB to update
+  // the stack pointer for real.
+  BuildMI(*ContinueMBB, ContinueMBBI, DL, TII.get(Is64Bit ? X86::SUB64rr : X86::SUB32rr), SPReg)
+      .addReg(SPReg)
+      .addReg(SizeReg);
+
+  // Add the control flow edges we need.
+  MBB.addSuccessor(LoopMBB);
+  LoopMBB->addSuccessor(ContinueMBB);
+  LoopMBB->addSuccessor(LoopMBB);
+
+  // Mark all the instructions added to the prolog as frame setup.
+  if (InProlog) {
+    for (++BeforeMBBI; BeforeMBBI != MBB.end(); ++BeforeMBBI) {
+      BeforeMBBI->setFlag(MachineInstr::FrameSetup);
+    }
+    for (MachineBasicBlock::iterator MI = LoopMBB->begin();
+         MI != LoopMBB->end(); ++MI) {
+      MI->setFlag(MachineInstr::FrameSetup);
+    }
+    for (MachineBasicBlock::iterator CMBBI = ContinueMBB->begin();
+         CMBBI != ContinueMBBI; ++CMBBI) {
+      CMBBI->setFlag(MachineInstr::FrameSetup);
+    }
+  }
+
+  return ContinueMBBI;
+}
+
 static unsigned calculateSetFPREG(uint64_t SPAdjust) {
   // Win64 ABI has a less restrictive limitation of 240; 128 works equally well
   // and might require smaller successive adjustments.
@@ -946,7 +1150,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     X86FI->setCalleeSavedFrameSize(
       X86FI->getCalleeSavedFrameSize() - TailCallReturnAddrDelta);
 
-  bool UseStackProbe = (STI.isOSWindows() && !STI.isTargetMachO());
+  bool UseRedZone = false;
+  bool WindowsStackProbe = STI.isOSWindows() && !STI.isTargetMachO();
+  bool UseStackProbe = WindowsStackProbe || MF.shouldProbeStack();
 
   // The default stack probe size is 4096 if the function has no stackprobesize
   // attribute.
@@ -966,6 +1172,12 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
       !MFI->hasVarSizedObjects() &&             // No dynamic alloca.
       !MFI->adjustsStack() &&                   // No calls.
       !IsWin64CC &&                             // Win64 has no Red Zone
+
+      !(UseStackProbe && StackSize > 128) && // Only use the Red Zone if we can
+                                             // fit the whole stack in it
+                                             // and thus stack probes won't be
+                                             // needed
+
       !MFI->hasCopyImplyingStackAdjustment() && // Don't push and pop.
       !MF.shouldSplitStack()) {                 // Regular stack
     uint64_t MinSize = X86FI->getCalleeSavedFrameSize();
@@ -973,6 +1185,7 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
     X86FI->setUsesRedZone(MinSize > 0 || StackSize > 0);
     StackSize = std::max(MinSize, StackSize > 128 ? StackSize - 128 : 0);
     MFI->setStackSize(StackSize);
+    UseRedZone = true;
   }
 
   // Insert stack pointer adjustment for later moving of return addr.  Only
@@ -1153,54 +1366,84 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   if (IsWin64Prologue && !IsFunclet && TRI->needsStackRealignment(MF))
     AlignedNumBytes = alignTo(AlignedNumBytes, MaxAlign);
   if (AlignedNumBytes >= StackProbeSize && UseStackProbe) {
-    // Check whether EAX is livein for this block.
-    bool isEAXAlive = isEAXLiveIn(MBB);
+    assert(!UseRedZone && "The Red Zone is not accounted for in stack probes");
 
-    if (isEAXAlive) {
-      // Sanity check that EAX is not livein for this function.
-      // It should not be, so throw an assert.
-      assert(!Is64Bit && "EAX is livein in x64 case!");
+    uint64_t PageSize = 0x1000;
 
-      // Save EAX
-      BuildMI(MBB, MBBI, DL, TII.get(X86::PUSH32r))
-        .addReg(X86::EAX, RegState::Kill)
-        .setMIFlag(MachineInstr::FrameSetup);
-    }
+    // If we only need to probe 5 pages or below, we just emit instructions to
+    // do that instead of using the loop. This is just what the loop in
+    // the called function would do. 5 probes is what GCC will do before using
+    // a loop.
+    if (!WindowsStackProbe && NumBytes <= 5 * PageSize) {
+      for (uint64_t i = 0; i < NumBytes / PageSize; ++i) {
+        BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::OR64mi8 : X86::OR32mi8))
+          .addReg(StackPtr)
+          .addImm(1)
+          .addReg(0)
+          .addImm(- (i + 1) * PageSize)
+          .addReg(0)
+          .addImm(0)
+          .setMIFlag(MachineInstr::FrameSetup);
+      }
 
-    if (Is64Bit) {
-      // Handle the 64-bit Windows ABI case where we need to call __chkstk.
-      // Function prologue is responsible for adjusting the stack pointer.
-      if (isUInt<32>(NumBytes)) {
+      BuildMI(MBB, MBBI, DL, TII.get(Is64Bit ? X86::SUB64ri32 : X86::SUB32ri),
+              StackPtr)
+         .addReg(StackPtr)
+         .addImm(NumBytes)
+         .setMIFlag(MachineInstr::FrameSetup);
+
+    } else {
+      // In the large code model, we have to load the stack probe function into a scratch
+      // register to call it. R11 is used for that.
+      bool SpillR11 = WindowsStackProbe &&
+                      Is64Bit &&
+                      MF.getTarget().getCodeModel() == CodeModel::Large;
+
+      // We spill the registers we need for the stack probes.
+
+      bool RAXAlive, RCXAlive, RDXAlive, R11Alive;
+
+      pushRegForStackProbeCall(MF, MBB, MBBI, DL, RAXAlive, X86::RAX, NumBytes);
+      if (!WindowsStackProbe) {
+        pushRegForStackProbeCall(MF, MBB, MBBI, DL, RCXAlive, X86::RCX, NumBytes);
+        pushRegForStackProbeCall(MF, MBB, MBBI, DL, RDXAlive, X86::RDX, NumBytes);
+      }
+      if (SpillR11) {
+        pushRegForStackProbeCall(MF, MBB, MBBI, DL, R11Alive, X86::R11, NumBytes);
+      }
+
+      if (Is64Bit) {
+        if (isUInt<32>(NumBytes)) {
+          BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
+              .addImm(NumBytes)
+              .setMIFlag(MachineInstr::FrameSetup);
+        } else if (isInt<32>(NumBytes)) {
+          BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri32), X86::RAX)
+              .addImm(NumBytes)
+              .setMIFlag(MachineInstr::FrameSetup);
+        } else {
+          BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri), X86::RAX)
+              .addImm(NumBytes)
+              .setMIFlag(MachineInstr::FrameSetup);
+        }
+      } else {
         BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
             .addImm(NumBytes)
             .setMIFlag(MachineInstr::FrameSetup);
-      } else if (isInt<32>(NumBytes)) {
-        BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri32), X86::RAX)
-            .addImm(NumBytes)
-            .setMIFlag(MachineInstr::FrameSetup);
-      } else {
-        BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64ri), X86::RAX)
-            .addImm(NumBytes)
-            .setMIFlag(MachineInstr::FrameSetup);
       }
-    } else {
-      // Allocate NumBytes-4 bytes on stack in case of isEAXAlive.
-      // We'll also use 4 already allocated bytes for EAX.
-      BuildMI(MBB, MBBI, DL, TII.get(X86::MOV32ri), X86::EAX)
-          .addImm(isEAXAlive ? NumBytes - 4 : NumBytes)
-          .setMIFlag(MachineInstr::FrameSetup);
-    }
 
-    // Call __chkstk, __chkstk_ms, or __alloca.
-    emitStackProbe(MF, MBB, MBBI, DL, true);
+      // Ensure stack probes are done
+      emitStackProbe(MF, MBB, MBBI, DL, true);
 
-    if (isEAXAlive) {
-      // Restore EAX
-      MachineInstr *MI =
-          addRegOffset(BuildMI(MF, DL, TII.get(X86::MOV32rm), X86::EAX),
-                       StackPtr, false, NumBytes - 4);
-      MI->setFlag(MachineInstr::FrameSetup);
-      MBB.insert(MBBI, MI);
+      // Now we restore the spilled registers from the stack
+      if (SpillR11) {
+        popRegForStackProbeCall(MF, MBB, MBBI, DL, R11Alive, X86::R11, NumBytes);
+      }
+      if (!WindowsStackProbe) {
+        popRegForStackProbeCall(MF, MBB, MBBI, DL, RDXAlive, X86::RDX, NumBytes);
+        popRegForStackProbeCall(MF, MBB, MBBI, DL, RCXAlive, X86::RCX, NumBytes);
+      }
+      popRegForStackProbeCall(MF, MBB, MBBI, DL, RAXAlive, X86::RAX, NumBytes);
     }
   } else if (NumBytes) {
     emitSPUpdate(MBB, MBBI, -(int64_t)NumBytes, /*InEpilogue=*/false);

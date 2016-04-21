@@ -47,6 +47,21 @@ public:
 
   unsigned StackPtr;
 
+  void pushRegForStackProbeCall(MachineFunction &MF,
+                                MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator MBBI,
+                                DebugLoc DL,
+                                bool &IsAlive,
+                                unsigned RegType,
+                                uint64_t &NumBytes) const;
+  void popRegForStackProbeCall(MachineFunction &MF,
+                               MachineBasicBlock &MBB,
+                               MachineBasicBlock::iterator MBBI,
+                               DebugLoc DL,
+                               bool &IsAlive,
+                               unsigned RegType,
+                               uint64_t &NumBytes) const;
+
   /// Emit target stack probe code. This is required for all
   /// large stack allocations on Windows. The caller is required to materialize
   /// the number of bytes to probe in RAX/EAX. Returns instruction just
@@ -58,6 +73,12 @@ public:
   /// Replace a StackProbe inline-stub with the actual probe code inline.
   void inlineStackProbe(MachineFunction &MF,
                         MachineBasicBlock &PrologMBB) const override;
+
+  /// Emit a loop that probes the stack. The caller is required to materialize
+  /// the number of bytes to probe in RAX/EAX.
+  MachineInstr *emitStackProbes(MachineFunction &MF, MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator MBBI, DebugLoc DL,
+                                bool InProlog) const;
 
   void emitCalleeSavedFrameMoves(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator MBBI,
